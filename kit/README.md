@@ -1,44 +1,51 @@
 # Audit kit for v6 contrast sets
 
-Everything an independent auditor (Astra, Fable, or a human) needs to score v6
-sets the same way the Sep 3 v5 wave-1 audit scored v5 sets.
+Batch preparation for the same construction audit used by both installed skills.
+Use [the shared rubric](../codex/audit-contrast-set/rubric_v6.md); the Claude copy
+is identical. The kit does not contain a separate rubric.
 
 | File | What |
 |---|---|
-| `rubric_v6.md` | The rubric the auditor reads first. Same T/A/H/P definitions, tags, verdicts and output shape as the v5 rubric (`../harley_msv1_forward_v1_wave1_v5/audit/rubric_v5_20260903.md`); the style_control section is the v6 manner-on-a-disjoint-task definition, the S tags are new, and the output row gains five S fields. |
 | `slice_auditor_prompt_v6.md` | Per-slice wrapper. Fill `{RUBRIC_PATH}`, `{SLICE_PATH}`, `{OUT_PATH}`, `{N}`. |
 | `audit_prep_v6.py` | Renders a run root into `sets.md`, `pairs.tsv`, `funnel.json` and `slices/slice_N.md` (24 sets each). |
 
 ## Run
 
+From the repository root, with explicit run and output paths:
+
 ```bash
-cd /local-scratch/localhome/wgb/behavior-latent-library/wildchat_candidate_mining_2/runs
-PY=/localhome/wgb/.venvs/bll-mining/bin/python
-$PY audit_kit_v6/audit_prep_v6.py harley_msv1_forward_v1_wave4_v6 harley_msv1_forward_v1_wave4_v6/audit/prep_v6
-$PY audit_kit_v6/audit_prep_v6.py harley_msv1_style_refresh_v6_wave1 harley_msv1_style_refresh_v6_wave1/audit/prep_v6 --parent harley_msv1_forward_v1_wave1_v5
-$PY audit_kit_v6/audit_prep_v6.py harley_msv1_style_refresh_v6_wave2 harley_msv1_style_refresh_v6_wave2/audit/prep_v6 --parent harley_msv1_forward_v1_wave2_v5
-$PY audit_kit_v6/audit_prep_v6.py harley_msv1_style_refresh_v6_wave3 harley_msv1_style_refresh_v6_wave3/audit/prep_v6 --parent harley_msv1_forward_v1_wave3_v5
+python3 kit/audit_prep_v6.py /path/to/run /path/to/audit/prep
 ```
 
-Refresh run roots have no `sampling/`, so pass the v5 parent with `--parent` to fill the `lang=` field.
+For style-refresh runs without `sampling/`, pass `--parent /path/to/parent/run`
+to fill the language field. Preparation reads source runs and writes the requested
+output directory; it does not call a model. Paid model audits require explicit
+authorization.
 
-Then, for each `slices/slice_N.md`, send one auditor the wrapper with the four
-placeholders filled and collect `verdicts_N.jsonl`. Merge, then a calibration
-pass over disagreements and over every set tagged FAIL. Final CSV goes to
-`<run_root>/audit/verdicts_v6_<date>.csv`.
+For each slice, provide the wrapper with all placeholders filled. Set
+`RUBRIC_PATH` to either installed skill's current `rubric_v6.md`. Collect one v3
+JSONL verdict per source id, including unresolved records as HOLD. Validate each
+record with the skill helper before importing or aggregating it.
 
-## Comparability with the v5 audit
+## Decisions and historical comparisons
 
-Keep the T/A/H/P tags and PASS/MINOR/FAIL semantics unchanged so keep rates are
-comparable with 135/30/20 on v5 wave 1. Only the S column moved: a v5 set could
-be tagged `S_DIFFERENT_TASK`; a v6 set is *required* to be a different task and
-is tagged on manner, disjointness, cue leakage, or template voice instead.
+Use PASS/approve, MINOR/revise, FAIL/reject, and HOLD/hold. MINOR requires
+`revision_needed`; HOLD requires `hold_reason` and may use null for unknown H/S
+findings. Do not evaluate or correct behaviour-family labels. Historical v1/v2
+records remain unchanged; the new approval rate counts PASS alone, so it is not
+directly comparable to a historical keep rate pooling PASS and MINOR.
 
-## What the slice shows for S
+The review app's v3 import compatibility remains unverified. Never silently map
+Revise/Hold into an older binary field.
 
-`PLAN.S.manner_dimensions.<dim>` gives the planner's status (`realised` or
-`not_applicable`), the quote from T it relied on, and its note. The auditor
-verifies each realised dimension in the rendered S and records what was actually
-found in `s_dimensions_realised` / `s_dimensions_missing`. `S_JACCARD` is the
-content-word overlap between S and T (0.0 is fully disjoint); it is diagnostic
-only.
+## Evidence in slices
+
+Slices contain original prompt text, anchor metadata, and H/S planner diagnostics.
+They omit family labels and family-selection rationale. `pairs.tsv` and
+`funnel.json` retain family metadata for provenance; they are not audit inputs.
+Plans and similarity/Jaccard scores are diagnostic claims, never verdict thresholds.
+Verify all five roles, even in runs that regenerated only S.
+
+These run slices include construction metadata and are not a blinded evaluation
+packet. For an independent performance test, follow the skill's separate protocol
+for prompt-only inputs and saving predictions before joining human labels.

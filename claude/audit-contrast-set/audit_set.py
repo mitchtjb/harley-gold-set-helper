@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""One-set-at-a-time audit helper for HARLEY v6 contrast sets.
+"""Portable audit helper for T/A/H/S/P contrast sets.
 
 Subcommands
   render  CANDIDATE_ID [--run RUN_ROOT] [--show-pipeline]
           Print one set as markdown: header, SIMILARITY, plan facts (H and S),
           five prompts. Pipeline judge verdicts are hidden unless --show-pipeline.
+  render  --file FILE [--collection KEY] [--candidate-id ID]
+          Read JSON, JSONL, CSV or TSV; print prompt-only records, without keys.
   record  CANDIDATE_ID --reviewer NAME --verdict-json FILE|-  [--run RUN_ROOT]
           Validate a verdict object and write
           <run_root>/audit/verdicts/<candidate_id>.<reviewer>.json
+          Use --output FILE instead of --run for a standalone verdict destination.
   next    --run RUN_ROOT --reviewer NAME [--human-verify-only] [--family F] [--n K]
           Print the next K candidate_ids in this run without a verdict from NAME.
   status  --run RUN_ROOT [--reviewer NAME] [--csv OUT]
@@ -33,48 +36,39 @@ from datetime import datetime, timezone
 RUNS_DIR = pathlib.Path(
     os.environ.get(
         "HARLEY_RUNS_DIR",
-        "/local-scratch/localhome/wgb/behavior-latent-library/wildchat_candidate_mining_2/runs",
+        str(pathlib.Path.cwd() / "wildchat_candidate_mining_2" / "runs"),
     )
 )
 RUBRIC_CANDIDATES = [
-    RUNS_DIR / "audit_kit_v6" / "rubric_v6.md",
     pathlib.Path(__file__).resolve().parent / "rubric_v6.md",
+    RUNS_DIR / "audit_kit_v6" / "rubric_v6.md",
 ]
 ROLES = ["misaligned_target", "aligned_control", "hard_negative", "style_control", "paraphrase_target"]
 LETTER = {"misaligned_target": "T", "aligned_control": "A", "hard_negative": "H", "style_control": "S", "paraphrase_target": "P"}
 DIMS = ["address_politeness", "register_formality", "sentence_shape", "orthography_punctuation", "discourse_format"]
-VERDICTS = {"PASS", "MINOR", "FAIL"}
+DECISION_FOR_VERDICT = {"PASS": "approve", "MINOR": "revise", "FAIL": "reject", "HOLD": "hold"}
+VERDICTS = set(DECISION_FOR_VERDICT)
 TAGS = {
     "H_METRIC_REDESCRIBED", "H_ADDS_PRESSURE", "H_UNSUPPORTED_FACT", "H_STILL_INAPPROPRIATE", "H_NEAR_COPY_OF_T",
     "A_KEEPS_PRESSURE", "A_CHANGES_TASK", "T_WEAK_ELICITATION", "T_FABRICATED_STAKES", "T_BLUNT_COMMAND",
-    "P_CHANGES_MECHANISM", "P_NEAR_COPY", "FAMILY_NOT_GROUNDED", "FAMILY_BETTER_FIT_ELSEWHERE",
+    "P_CHANGES_MECHANISM", "P_NEAR_COPY",
     "CONTEXT_DEPENDENT_ANCHOR", "TASK_DRIFT_ACROSS_SET", "LANGUAGE_DRIFT", "ROLE_MISLABELED_ANCHOR",
     "S_MANNER_NOT_REPRODUCED", "S_INSUFFICIENT_MANNER", "S_TOPIC_NOT_DISJOINT", "S_RETAINS_MECHANISM_CUE",
     "S_CREATES_PRESSURE", "S_IS_PARAPHRASE", "S_TEMPLATE_VOICE", "S_ADDS_SUBTASK", "S_LANGUAGE_CHANGED", "NONE",
 }
 REQUIRED = {
     "candidate_id": str, "verdict": str, "tags": list, "reason": str,
-    "h_decisive_fact_ok": bool, "family_grounded": bool,
+    "h_decisive_fact_ok": bool,
     "s_dimensions_realised": list, "s_dimensions_missing": list,
     "s_topic_disjoint": bool, "s_cue_free": bool, "s_same_speaker": bool,
     "decision": str,
 }
-OPTIONAL = {"notable": str, "family": str, "anchor_role": str, "contract_source": str, "human_verify_verdict": str, "human_verify_notes": str, "family_override": str}
-DECISIONS = {"gold", "reject"}
-# family_override records the accurate *canonical* target (the HARLEY prospectus
-# taxonomy), matching the review app's advertised Behaviour-label corrections. The
-# stamped `family` echoed from the run row stays a legacy generator slug and is not
-# validated here. See rubric_v6.md for the legacy->canonical crosswalk.
-FAMILIES = {
-    "scheming_covert_goal_pursuit", "alignment_faking_deceptive_compliance",
-    "reward_hacking_specification_gaming", "sabotage_hidden_harm",
-    "power_seeking_self_preservation", "sandbagging_eval_gaming",
-    "manipulation_coercion_blackmail", "privacy_violation_exfiltration",
-    "malicious_collaboration_harmful_goal", "strategic_false_reporting",
-    "harmful_persona_value_drift", "misaligned_unsafe_guidance",
-    "sycophantic_misrepresentation",
-}
-SCHEMA_VERSION = "harley_set_audit_verdict_v1"
+OPTIONAL = {"notable": str, "family": str, "anchor_role": str, "contract_source": str, "human_verify_verdict": str, "human_verify_notes": str,
+            "revision_needed": str, "hold_reason": str, "source_ref": str}
+DECISIONS = set(DECISION_FOR_VERDICT.values())
+# Family is optional source provenance only, never a judgment in new records.
+# Historical records are read directly by status without rewriting their schema.
+SCHEMA_VERSION = "harley_set_audit_verdict_v3"
 
 
 def jl(path: pathlib.Path):
@@ -169,7 +163,7 @@ def render(root, status, row, show_pipeline=False):
     sj = (row.get("cue_retention") or {}).get("style_content_word_jaccard_to_target")
     hv = bool(con.get("human_verify_required") or row.get("human_verify_required"))
     out = [
-        f"## {row['candidate_id']}  run={root.name} status={status} family={row.get('behavior_family')} anchor={row.get('anchor_role')} "
+        f"## {row['candidate_id']}  run={root.name} status={status} anchor={row.get('anchor_role')} "
         f"classified={row.get('classified_anchor_role')} native_h={row.get('native_h')} contract_source={row.get('behavior_contract_source')} "
         f"turn_index={row.get('source_turn_index')} lang={language_of(root, row)} repair_rounds={con.get('repair_rounds')} human_verify={hv}",
         "SIMILARITY(char ratio): " + " ".join(f"{k}={v:.2f}" for k, v in pairs.items()) + f" len_T={len(pr['misaligned_target'])}",
@@ -179,9 +173,6 @@ def render(root, status, row, show_pipeline=False):
         f"PLAN.H.original_fact: {hn.get('original_fact_in_target')}",
         f"PLAN.H.decisive_fact: {hn.get('decisive_fact')}",
     ]
-    fs = plan.get("family_selection")
-    if fs:
-        out.append(f"PLAN.family_selection: {json.dumps(fs, ensure_ascii=False)}")
     dt = sc.get("disjoint_task") or {}
     out.append(f"PLAN.S.domain: {json.dumps(sc.get('domain_selection') or {}, ensure_ascii=False)[:600]}")
     out.append(f"PLAN.S.task: {dt.get('task_summary')} | deliverable: {dt.get('required_deliverable')}")
@@ -210,51 +201,62 @@ def render(root, status, row, show_pipeline=False):
 
 
 def validate(v: dict, candidate_id: str):
+    if not isinstance(v, dict):
+        return ["verdict must be a JSON object"]
     errors = []
+    nullable = {"h_decisive_fact_ok", "s_dimensions_realised", "s_dimensions_missing",
+                "s_topic_disjoint", "s_cue_free", "s_same_speaker"}
     for k, t in REQUIRED.items():
         if k not in v:
             errors.append(f"missing {k}")
+        elif v.get("verdict") == "HOLD" and k in nullable and v[k] is None:
+            continue
         elif not isinstance(v[k], t):
             errors.append(f"{k} must be {t.__name__}")
     for k, t in OPTIONAL.items():
         if k in v and v[k] is not None and not isinstance(v[k], t):
             errors.append(f"{k} must be {t.__name__}")
+    if errors:
+        return errors
     extra = set(v) - set(REQUIRED) - set(OPTIONAL) - {"schema_version", "reviewer", "recorded_at_utc", "run"}
     if extra:
         errors.append(f"unknown fields {sorted(extra)}")
     if v.get("candidate_id") != candidate_id:
         errors.append("candidate_id mismatch")
     if v.get("verdict") not in VERDICTS:
-        errors.append("verdict must be PASS|MINOR|FAIL")
-    bad = [t for t in v.get("tags", []) if t not in TAGS]
+        errors.append("verdict must be PASS|MINOR|FAIL|HOLD")
+    bad = [t for t in v.get("tags", []) if not isinstance(t, str) or t not in TAGS]
     if bad:
         errors.append(f"unknown tags {bad}")
     if v.get("verdict") == "PASS" and v.get("tags") not in ([], ["NONE"]):
         errors.append("PASS must carry no tags (or NONE)")
     if v.get("verdict") in {"MINOR", "FAIL"} and (not v.get("tags") or v.get("tags") == ["NONE"]):
         errors.append("MINOR/FAIL must carry at least one tag")
+    if v.get("verdict") != "PASS" and "NONE" in v.get("tags", []):
+        errors.append("NONE is reserved for PASS")
     for k in ("s_dimensions_realised", "s_dimensions_missing"):
-        bad = [d for d in v.get(k, []) if d not in DIMS]
+        bad = [d for d in (v.get(k) or []) if d not in DIMS]
         if bad:
             errors.append(f"{k}: unknown dimensions {bad}")
+    if v.get("verdict") == "PASS":
+        for k in ("h_decisive_fact_ok", "s_topic_disjoint", "s_cue_free", "s_same_speaker"):
+            if v[k] is not True:
+                errors.append(f"PASS conflicts with {k}")
+        if len(set(d for d in v["s_dimensions_realised"] if isinstance(d, str))) < 2:
+            errors.append("PASS requires at least two realised manner dimensions")
+        if v["s_dimensions_missing"]:
+            errors.append("PASS conflicts with missing declared manner dimensions")
     if len(v.get("reason", "")) < 20:
         errors.append("reason too short; quote the offending phrase or say why it is clean")
-    # Decision layer: gold iff the set is usable (PASS or MINOR); reject iff FAIL.
+    # Readiness, repair, invalidity, and uncertainty are distinct outcomes.
     decision = v.get("decision")
     if decision not in DECISIONS:
-        errors.append("decision must be gold|reject")
-    elif v.get("verdict") in VERDICTS and (decision == "reject") != (v.get("verdict") == "FAIL"):
-        errors.append("decision must be reject for FAIL and gold for PASS/MINOR")
-    tags = set(v.get("tags", []))
-    override = (v.get("family_override") or "").strip()
-    if override and override not in FAMILIES:
-        errors.append(f"family_override must be a canonical prospectus family, got {override!r}")
-    if override and "FAMILY_BETTER_FIT_ELSEWHERE" not in tags:
-        errors.append("family_override requires the FAMILY_BETTER_FIT_ELSEWHERE tag")
-    if "FAMILY_BETTER_FIT_ELSEWHERE" in tags and not override:
-        errors.append("FAMILY_BETTER_FIT_ELSEWHERE needs family_override naming the better family")
-    if "FAMILY_NOT_GROUNDED" in tags and v.get("verdict") != "FAIL":
-        errors.append("FAMILY_NOT_GROUNDED means no family is grounded (FAIL); if another family fits use FAMILY_BETTER_FIT_ELSEWHERE + family_override")
+        errors.append("decision must be approve|revise|reject|hold")
+    elif v.get("verdict") in VERDICTS and decision != DECISION_FOR_VERDICT[v["verdict"]]:
+        errors.append("decision must match PASS/approve, MINOR/revise, FAIL/reject, HOLD/hold")
+    for verdict, field in (("MINOR", "revision_needed"), ("HOLD", "hold_reason")):
+        if v.get("verdict") == verdict and not (v.get(field) or "").strip():
+            errors.append(f"{verdict} requires {field}")
     return errors
 
 
@@ -264,26 +266,121 @@ def verdict_path(root: pathlib.Path, candidate_id: str, reviewer: str):
     return d / f"{candidate_id}.{reviewer}.json"
 
 
+def file_records(path: pathlib.Path, collection: str | None = None):
+    """Read common containers without choosing a split or interpreting judgments."""
+    suffix = path.suffix.lower()
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        if suffix in {".csv", ".tsv"}:
+            data = list(csv.DictReader(f, delimiter="\t" if suffix == ".tsv" else ","))
+        elif suffix == ".jsonl":
+            data = [json.loads(line) for line in f if line.strip()]
+        elif suffix == ".json":
+            data = json.load(f)
+        else:
+            raise ValueError("helper supports JSON/JSONL/CSV/TSV; use a suitable reader for other formats")
+    if collection:
+        if not isinstance(data, dict) or collection not in data:
+            raise ValueError(f"collection {collection!r} not found")
+        data = data[collection]
+    elif isinstance(data, dict) and not any(k in data for k in ("prompts", "packet", "complete_contrast", "roles", "T", "misaligned_target")):
+        raise ValueError("container requires --collection KEY; no collection was selected automatically")
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list) or not all(isinstance(row, dict) for row in data):
+        raise ValueError("expected a record object or a list of record objects")
+    return data
+
+
+def portable_packet(row, source_ref):
+    """Allow-list source text only: never return verdicts, notes, or planner keys."""
+    packet = row.get("packet", row)
+    if not isinstance(packet, dict):
+        raise ValueError(f"{source_ref}: packet must be an object")
+    roles = packet.get("prompts")
+    if roles is None:
+        roles = (packet.get("complete_contrast") or {}).get("roles")
+    if roles is None:
+        roles = packet.get("roles", packet)
+    if not isinstance(roles, dict):
+        raise ValueError(f"{source_ref}: role map must be an object")
+    prompts = {}
+    anchors = []
+    for long_name, letter in LETTER.items():
+        value = roles.get(letter, roles.get(long_name))
+        if isinstance(value, dict):
+            if value.get("is_anchor"):
+                anchors.append(long_name)
+            if "user_prompt" in value:
+                value = value["user_prompt"]
+            elif isinstance(value.get("rendered_messages"), list):
+                # Preserve all supplied messages/roles, including system context.
+                value = json.dumps(value["rendered_messages"], ensure_ascii=False)
+            else:
+                raise ValueError(f"{source_ref}: unsupported text structure for {letter}")
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"{source_ref}: {letter} must contain text")
+        prompts[letter] = value if value else None
+    anchor = packet.get("anchor_role") or row.get("anchor_role")
+    if len(anchors) > 1:
+        raise ValueError(f"{source_ref}: multiple roles marked as source anchor")
+    if anchors and anchor and anchor not in (anchors[0], LETTER[anchors[0]]):
+        raise ValueError(f"{source_ref}: conflicting source anchor metadata")
+    return {
+        "source_ref": source_ref,
+        "candidate_id": row.get("candidate_id") or packet.get("candidate_id") or None,
+        "anchor_role": anchor or (anchors[0] if anchors else None),
+        "language": packet.get("language") or row.get("language"),
+        "prompts": prompts,
+    }
+
+
 def cmd_render(a):
+    if a.file:
+        if a.run or a.show_pipeline:
+            sys.exit("--file cannot be combined with --run or --show-pipeline")
+        source = pathlib.Path(a.file)
+        if a.candidate_id and a.file_candidate_id and a.candidate_id != a.file_candidate_id:
+            sys.exit("conflicting candidate selectors")
+        selected = a.candidate_id or a.file_candidate_id
+        try:
+            packets = [portable_packet(row, f"{source.resolve()}#{i}")
+                       for i, row in enumerate(file_records(source, a.collection), 1)]
+        except (ValueError, OSError) as e:
+            sys.exit(f"input could not be rendered; no audit verdict assigned: {e}")
+        if selected:
+            packets = [p for p in packets if p["candidate_id"] == selected]
+            if len(packets) != 1:
+                sys.exit(f"expected one matching source id, found {len(packets)}; disambiguate the input")
+        for packet in packets:
+            print(json.dumps(packet, ensure_ascii=False))
+        return
+    if a.collection or a.file_candidate_id:
+        sys.exit("--collection and --candidate-id require --file")
+    if not a.candidate_id:
+        sys.exit("provide --file FILE or a run candidate id")
     root, status, row = find_set(a.candidate_id, resolve_run(a.run) if a.run else None)
     print(render(root, status, row, show_pipeline=a.show_pipeline))
 
 
 def cmd_record(a):
-    root, status, row = find_set(a.candidate_id, resolve_run(a.run) if a.run else None)
     raw = sys.stdin.read() if a.verdict_json == "-" else pathlib.Path(a.verdict_json).read_text(encoding="utf-8")
     v = json.loads(raw)
     errs = validate(v, a.candidate_id)
     if errs:
         sys.exit("verdict rejected:\n  " + "\n  ".join(errs))
-    v.setdefault("family", row.get("behavior_family"))
-    v.setdefault("anchor_role", row.get("anchor_role"))
-    v.setdefault("contract_source", row.get("behavior_contract_source"))
+    if a.output:
+        p = pathlib.Path(a.output)
+        p.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        root, status, row = find_set(a.candidate_id, resolve_run(a.run) if a.run else None)
+        v.setdefault("family", row.get("behavior_family"))
+        v.setdefault("anchor_role", row.get("anchor_role"))
+        v.setdefault("contract_source", row.get("behavior_contract_source"))
+        v["run"] = root.name
+        p = verdict_path(root, a.candidate_id, a.reviewer)
     v["schema_version"] = SCHEMA_VERSION
     v["reviewer"] = a.reviewer
-    v["run"] = root.name
     v["recorded_at_utc"] = datetime.now(timezone.utc).isoformat()
-    p = verdict_path(root, a.candidate_id, a.reviewer)
     existed = p.exists()
     p.write_text(json.dumps(v, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"{'updated' if existed else 'recorded'} {p}")
@@ -328,13 +425,13 @@ def cmd_status(a):
     total = len(ordered_ids(root))
     by = {}
     for r in rows:
-        by.setdefault(r["reviewer"], {"PASS": 0, "MINOR": 0, "FAIL": 0})
+        by.setdefault(r["reviewer"], {"PASS": 0, "MINOR": 0, "FAIL": 0, "HOLD": 0})
         by[r["reviewer"]][r["verdict"]] += 1
     print(json.dumps({"run": root.name, "approved_sets": total, "verdicts_by_reviewer": by}, indent=1))
     if a.csv:
-        cols = ["candidate_id", "run", "reviewer", "family", "anchor_role", "contract_source", "verdict", "tags", "h_decisive_fact_ok",
+        cols = ["candidate_id", "schema_version", "source_ref", "run", "reviewer", "family", "anchor_role", "contract_source", "verdict", "tags", "h_decisive_fact_ok",
                 "family_grounded", "s_dimensions_realised", "s_dimensions_missing", "s_topic_disjoint", "s_cue_free", "s_same_speaker",
-                "decision", "family_override", "human_verify_verdict", "human_verify_notes", "notable", "reason", "recorded_at_utc"]
+                "decision", "revision_needed", "hold_reason", "family_override", "human_verify_verdict", "human_verify_notes", "notable", "reason", "recorded_at_utc"]
         with open(a.csv, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
             w.writeheader()
@@ -357,8 +454,8 @@ def cmd_rubric(a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("render"); p.add_argument("candidate_id"); p.add_argument("--run"); p.add_argument("--show-pipeline", action="store_true"); p.set_defaults(fn=cmd_render)
-    p = sub.add_parser("record"); p.add_argument("candidate_id"); p.add_argument("--run"); p.add_argument("--reviewer", required=True); p.add_argument("--verdict-json", required=True); p.set_defaults(fn=cmd_record)
+    p = sub.add_parser("render"); p.add_argument("candidate_id", nargs="?"); p.add_argument("--file"); p.add_argument("--collection"); p.add_argument("--candidate-id", dest="file_candidate_id"); p.add_argument("--run"); p.add_argument("--show-pipeline", action="store_true"); p.set_defaults(fn=cmd_render)
+    p = sub.add_parser("record"); p.add_argument("candidate_id"); dest = p.add_mutually_exclusive_group(); dest.add_argument("--run"); dest.add_argument("--output"); p.add_argument("--reviewer", required=True); p.add_argument("--verdict-json", required=True); p.set_defaults(fn=cmd_record)
     p = sub.add_parser("next"); p.add_argument("--run", required=True); p.add_argument("--reviewer", required=True); p.add_argument("--human-verify-only", action="store_true"); p.add_argument("--family"); p.add_argument("--n", type=int, default=1); p.set_defaults(fn=cmd_next)
     p = sub.add_parser("status"); p.add_argument("--run", required=True); p.add_argument("--reviewer"); p.add_argument("--csv"); p.set_defaults(fn=cmd_status)
     p = sub.add_parser("rubric"); p.set_defaults(fn=cmd_rubric)

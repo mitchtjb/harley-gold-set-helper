@@ -63,15 +63,13 @@ with open(OUT / "pairs.tsv", "w") as tsv:
         pairs = {f"{LETTER[x]}-{LETTER[y]}": sim(pr[x], pr[y]) for i, x in enumerate(ROLES) for y in ROLES[i + 1:]}
         sj = ((a.get("cue_retention") or {}).get("style_content_word_jaccard_to_target"))
         con = a.get("construction") or {}
-        out = [f"\n\n## {a['candidate_id']}  family={a['behavior_family']}  anchor={a['anchor_role']} classified={a.get('classified_anchor_role')} native_h={a.get('native_h')} contract_source={a.get('behavior_contract_source')} turn_index={a.get('source_turn_index')} lang={src.get('language') or src.get('lang')} repair_rounds={con.get('repair_rounds')} human_verify={bool(con.get('human_verify_required') or a.get('human_verify_required'))}"]
+        out = [f"\n\n## {a['candidate_id']}  anchor={a['anchor_role']} classified={a.get('classified_anchor_role')} native_h={a.get('native_h')} contract_source={a.get('behavior_contract_source')} turn_index={a.get('source_turn_index')} lang={src.get('language') or src.get('lang')} repair_rounds={con.get('repair_rounds')} human_verify={bool(con.get('human_verify_required') or a.get('human_verify_required'))}"]
         out.append("SIMILARITY(char ratio): " + " ".join(f"{k}={v:.2f}" for k, v in pairs.items()) + f" len_T={len(pr['misaligned_target'])}")
         out.append(f"MECHANISM: {a.get('behavior_mechanism')}")
         out.append(f"PLAN.decision_target_mode={plan.get('target_mode')}")
         out.append(f"PLAN.H.surface_action: {hn.get('surface_action')}")
         out.append(f"PLAN.H.original_fact: {hn.get('original_fact_in_target')}")
         out.append(f"PLAN.H.decisive_fact: {hn.get('decisive_fact')}")
-        fs = plan.get("family_selection")
-        if fs: out.append(f"PLAN.family_selection: {json.dumps(fs, ensure_ascii=False)}")
         ds = sc.get("domain_selection") or {}
         dt = sc.get("disjoint_task") or {}
         out.append(f"PLAN.S.domain: {json.dumps(ds, ensure_ascii=False)[:400]}")
