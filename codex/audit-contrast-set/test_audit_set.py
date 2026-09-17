@@ -1,6 +1,6 @@
 """Local schema/recording regression checks; no dataset or model calls.
 
-Run from this skill directory: python3 -B -m unittest discover
+Run: python3 -B -m unittest discover -s .agents/skills/audit-contrast-set -p 'test_*.py'
 """
 import contextlib
 import csv
@@ -22,7 +22,7 @@ spec.loader.exec_module(audit)
 
 def verdict():
     return {
-        'candidate_id': 'wildchat_fixture', 'verdict': 'PASS', 'tags': ['NONE'],
+        'candidate_id': 'wildchat_fixture', 'tags': ['NONE'],
         'reason': 'All role relations hold in this synthetic recording fixture.',
         'h_decisive_fact_ok': True, 's_dimensions_realised': audit.DIMS.copy(),
         's_dimensions_missing': [], 's_topic_disjoint': True,
@@ -31,26 +31,31 @@ def verdict():
 
 
 class LabelFreeAuditTests(unittest.TestCase):
+    def test_only_binary_outcomes_and_no_secondary_verdict(self):
+        for decision in ('revise', 'reject', 'hold', 'gold', 'PASS', 'MINOR', 'FAIL', 'HOLD'):
+            self.assertTrue(audit.validate(verdict() | {'decision': decision}, 'wildchat_fixture'))
+        for old_verdict in ('PASS', 'MINOR', 'FAIL', 'HOLD'):
+            self.assertTrue(audit.validate(verdict() | {'verdict': old_verdict}, 'wildchat_fixture'))
+
     def test_pass_cannot_contradict_its_own_role_findings(self):
         for update in ({'h_decisive_fact_ok': False}, {'s_cue_free': False},
                        {'s_dimensions_realised': ['sentence_shape', 'sentence_shape']},
                        {'s_dimensions_missing': ['register_formality']}):
             self.assertTrue(audit.validate(verdict() | update, 'wildchat_fixture'))
 
-    def test_minor_requires_repair_and_cannot_be_approved(self):
-        v = verdict() | {'verdict': 'MINOR', 'decision': 'revise',
+    def test_repair_is_explanation_for_denial_and_cannot_be_approved(self):
+        v = verdict() | {'decision': 'deny',
                          'tags': ['P_NEAR_COPY'], 'revision_needed': 'Restate independently while preserving the same facts.'}
         self.assertEqual(audit.validate(v, v['candidate_id']), [])
         for decision in ('approve', 'gold', 'reject', 'hold'):
             self.assertTrue(audit.validate(v | {'decision': decision}, v['candidate_id']))
-        self.assertTrue(audit.validate(v | {'revision_needed': ''}, v['candidate_id']))
 
-    def test_hold_preserves_unknown_without_inventing_a_defect(self):
-        v = verdict() | {'verdict': 'HOLD', 'decision': 'hold', 'tags': [],
-                         'hold_reason': 'H is missing from the supplied file.', 'h_decisive_fact_ok': None,
+    def test_denial_preserves_unknown_without_inventing_a_defect(self):
+        v = verdict() | {'decision': 'deny', 'tags': [],
+                         'evidence_gap': 'H is missing from the supplied file.', 'h_decisive_fact_ok': None,
                          's_dimensions_realised': None, 's_dimensions_missing': None}
         self.assertEqual(audit.validate(v, v['candidate_id']), [])
-        self.assertTrue(audit.validate(v | {'hold_reason': ''}, v['candidate_id']))
+        self.assertTrue(audit.validate(v | {'evidence_gap': ''}, v['candidate_id']))
         self.assertTrue(audit.validate(v | {'decision': 'approve'}, v['candidate_id']))
         self.assertTrue(audit.validate(verdict() | {'h_decisive_fact_ok': None}, v['candidate_id']))
 
@@ -112,17 +117,18 @@ class LabelFreeAuditTests(unittest.TestCase):
     def test_standalone_output_records_revision_without_lab_access(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / 'verdict.json'
-            v = verdict() | {'candidate_id': 'document.csv#2', 'verdict': 'MINOR',
-                             'decision': 'revise', 'tags': ['P_NEAR_COPY'],
+            v = verdict() | {'candidate_id': 'document.csv#2',
+                             'decision': 'deny', 'tags': ['P_NEAR_COPY'],
                              'revision_needed': 'Rephrase P independently.', 'source_ref': 'document.csv#2'}
             subprocess.run([sys.executable, '-B', str(HELPER), 'record', v['candidate_id'],
                             '--output', str(output), '--reviewer', 'fixture', '--verdict-json', '-'],
                            input=json.dumps(v), env=dict(os.environ, HARLEY_RUNS_DIR=str(Path(tmp) / 'absent')),
                            text=True, capture_output=True, check=True)
             saved = json.loads(output.read_text())
-            self.assertEqual(saved['decision'], 'revise')
+            self.assertEqual(saved['decision'], 'deny')
             self.assertNotIn('run', saved)
-            self.assertEqual(saved['schema_version'], 'harley_set_audit_verdict_v3')
+            self.assertNotIn('verdict', saved)
+            self.assertEqual(saved['schema_version'], 'harley_set_audit_verdict_v4')
 
     def test_label_not_required_and_metadata_does_not_change_validity(self):
         for family in (None, 'unknown-source-label', 'sycophancy'):
@@ -134,8 +140,8 @@ class LabelFreeAuditTests(unittest.TestCase):
     def test_retired_label_judgments_cannot_be_recorded(self):
         for update in (
             {'family_grounded': True}, {'family_override': 'strategic_false_reporting'},
-            {'verdict': 'MINOR', 'tags': ['FAMILY_BETTER_FIT_ELSEWHERE']},
-            {'verdict': 'FAIL', 'decision': 'reject', 'tags': ['FAMILY_NOT_GROUNDED']},
+            {'tags': ['FAMILY_BETTER_FIT_ELSEWHERE']},
+            {'decision': 'deny', 'tags': ['FAMILY_NOT_GROUNDED']},
         ):
             with self.subTest(update=update):
                 v = verdict() | update
@@ -143,7 +149,7 @@ class LabelFreeAuditTests(unittest.TestCase):
 
     def test_role_failure_and_decision_checks_still_apply(self):
         v = verdict() | {
-            'verdict': 'FAIL', 'tags': ['A_KEEPS_PRESSURE'], 'decision': 'reject',
+            'tags': ['A_KEEPS_PRESSURE'], 'decision': 'deny',
             'reason': 'A still contains the same instruction to suppress contrary evidence.',
         }
         self.assertEqual(audit.validate(v, v['candidate_id']), [])
@@ -180,7 +186,7 @@ class LabelFreeAuditTests(unittest.TestCase):
             )
         self.assertEqual(Path(result.stdout.strip()).resolve(), HELPER.with_name('rubric_v6.md').resolve())
 
-    def test_record_v3_and_read_legacy_without_rewriting_it(self):
+    def test_record_v4_and_read_legacy_without_rewriting_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / 'fixture_run'
             final = root / 'variants' / 'final'
@@ -193,7 +199,7 @@ class LabelFreeAuditTests(unittest.TestCase):
             vdir.mkdir(parents=True)
             old = verdict() | {
                 'schema_version': 'harley_set_audit_verdict_v1', 'family_grounded': True,
-                'decision': 'gold',
+                'decision': 'gold', 'verdict': 'PASS',
                 'family_override': '', 'reviewer': 'legacy', 'family': 'old-label',
             }
             legacy = vdir / 'wildchat_fixture.legacy.json'
@@ -204,7 +210,7 @@ class LabelFreeAuditTests(unittest.TestCase):
                 '--run', str(root), '--reviewer', 'current', '--verdict-json', '-',
             ], input=json.dumps(verdict()), text=True, capture_output=True, check=True)
             saved = json.loads((vdir / 'wildchat_fixture.current.json').read_text())
-            self.assertEqual(saved['schema_version'], 'harley_set_audit_verdict_v3')
+            self.assertEqual(saved['schema_version'], 'harley_set_audit_verdict_v4')
             self.assertEqual(saved['family'], 'opaque-source-label')
             self.assertNotIn('family_grounded', saved)
             self.assertNotIn('family_override', saved)
@@ -215,6 +221,9 @@ class LabelFreeAuditTests(unittest.TestCase):
             ], text=True, capture_output=True, check=True)
             self.assertIn('"current"', result.stdout)
             self.assertIn('"legacy"', result.stdout)
+            summary = json.loads(result.stdout.split('\nwrote ')[0])
+            self.assertEqual(summary['decisions_by_reviewer'], {'current': {'approve': 1, 'deny': 0}})
+            self.assertEqual(summary['historical_verdicts_by_reviewer'], {'legacy': {'PASS': 1}})
             with report.open() as stream:
                 rows = {r['reviewer']: r for r in csv.DictReader(stream)}
             self.assertEqual(rows['current']['family_grounded'], '')

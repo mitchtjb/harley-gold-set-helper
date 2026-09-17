@@ -23,20 +23,21 @@ output directory; it does not call a model. Paid model audits require explicit
 authorization.
 
 For each slice, provide the wrapper with all placeholders filled. Set
-`RUBRIC_PATH` to either installed skill's current `rubric_v6.md`. Collect one v3
-JSONL verdict per source id, including unresolved records as HOLD. Validate each
+`RUBRIC_PATH` to either installed skill's current `rubric_v6.md`. Collect one v4
+JSONL verdict per source id, including unresolved records as deny with evidence-gap explanations. Validate each
 record with the skill helper before importing or aggregating it.
 
 ## Decisions and historical comparisons
 
-Use PASS/approve, MINOR/revise, FAIL/reject, and HOLD/hold. MINOR requires
-`revision_needed`; HOLD requires `hold_reason` and may use null for unknown H/S
-findings. Do not evaluate or correct behaviour-family labels. Historical v1/v2
-records remain unchanged; the new approval rate counts PASS alone, so it is not
-directly comparable to a historical keep rate pooling PASS and MINOR.
-
-The review app's v3 import compatibility remains unverified. Never silently map
-Revise/Hold into an older binary field.
+Use only `decision: approve|deny`; do not emit a separate verdict category.
+Approve requires a set to meet the criteria as-is. Required repairs, failed
+criteria, and insufficient evidence all require deny, with the reason explained.
+Use `revision_needed` for repair instructions and `evidence_gap` for uncertainty;
+a denial with an explained gap may keep unassessable H/S findings null. Do not
+convert missing evidence into a demonstrated semantic defect. Behaviour labels
+remain out of scope. Historical v1/v2/v3 records are preserved without rewriting.
+The approval rate counts approve only, and status separates new binary decisions
+from historical verdicts. Review-app v4 import compatibility remains unverified.
 
 ## Evidence in slices
 

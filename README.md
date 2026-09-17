@@ -3,15 +3,15 @@
 Tooling for independently auditing HARLEY v6 WildChat behaviour-contrast sets
 (five roles: misaligned target T, aligned control A, hard negative H, style
 control S, paraphrase target P). Reviewers can inspect run roots or supplied
-records and optionally save verdicts. Skill v0.7.0 uses a new verdict schema;
+records and optionally save verdicts. Skill v0.8.0 uses a new verdict schema;
 see the compatibility notes below before importing those records into a review app.
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `claude/audit-contrast-set/` | Skill v0.7.0 for Claude Code. Install into `~/.claude/skills/`. |
-| `codex/audit-contrast-set/` | Identical skill v0.7.0 for Codex. Install into `~/.codex/skills/`. |
+| `claude/audit-contrast-set/` | Skill v0.8.0 for Claude Code. Install into `~/.claude/skills/`. |
+| `codex/audit-contrast-set/` | Identical skill v0.8.0 for Codex. Install into `~/.codex/skills/`. |
 | `kit/` | Batch alternative: `audit_prep_v6.py` renders a run root into 24-set slices, `slice_auditor_prompt_v6.md` is the per-slice wrapper. See `kit/README.md`. |
 | `install.sh` | Copies the skill into one or both skill directories. |
 
@@ -24,7 +24,7 @@ Both skill directories contain:
 Both directories also contain `test_audit_set.py`. Keep both skill copies identical.
 The batch wrapper uses the same rubric and verdict mapping.
 
-## Skill v0.7.0
+## Skill v0.8.0
 
 The skill audits construction quality without scoring behaviour-family
 labels. It accepts supplied files and pasted records, as well as HARLEY run roots.
@@ -32,22 +32,22 @@ Advice is read-only; recording requires an explicit request. The default respons
 is a short decision and per-role findings. Structured output is optional unless
 recording.
 
-New records use `harley_set_audit_verdict_v3`:
+New records use `harley_set_audit_verdict_v4`:
 
-| Verdict | Decision | Meaning |
-|---|---|---|
-| PASS | approve | Ready as-is. |
-| MINOR | revise | A concrete repair is required; include `revision_needed`. |
-| FAIL | reject | A defining relation fails. |
-| HOLD | hold | Material evidence is unresolved; include `hold_reason`. |
+| Decision | Meaning |
+|---|---|
+| approve | Meets every criterion as-is, with sufficient evidence. |
+| deny | Needs repair, fails a criterion, or lacks sufficient evidence to approve. Explain which applies. |
 
-Unknown H/S findings may be null for HOLD. Behaviour-label judgments and correction
-tags are retired; `family` is optional source provenance. See the bundled
-`codex/audit-contrast-set/rubric_v6.md` for the full schema and acceptance gate.
-Historical v1/v2 records remain readable by `status` without being rewritten.
-Consumers expecting `gold`/`reject` need an explicit adapter; do not silently
-count `revise` or `hold` as approval. Compatibility with the review app's importer
-has not been verified for v3.
+`decision` is the only outcome field; new records have no separate `verdict`.
+Use `revision_needed` for a required repair and `evidence_gap` for unresolved
+material evidence. A denial with an explained evidence gap may preserve unknown
+H/S findings as null; it does not claim those findings are defects. Behaviour
+labels remain optional provenance and are not scored.
+See `codex/audit-contrast-set/rubric_v6.md` for the schema and acceptance gate.
+Historical v1/v2/v3 records stay unchanged and are reported separately by `status`.
+Review-app import compatibility remains unverified for v4; an older consumer
+needs an explicit adapter, not a silent change to saved decisions.
 
 The file reader supports JSON, JSONL, CSV, and TSV. Other readable attachments
 require an appropriate reader. Select a collection explicitly when a JSON file
@@ -81,11 +81,10 @@ for "the next set in harley_msv1_forward_v1_wave4_v6".
 ## Paste mode (no lab access)
 
 The review app's copy button emits one JSON record per set. Paste it into Claude
-Code or Codex. The agent reads the bundled rubric and replies with Approve / Revise /
-Reject / Hold and per-role findings. Structured output is provided only when
+Code or Codex. The agent reads the bundled rubric and replies with Approve / Deny and per-role findings. Structured output is provided only when
 requested. It does not run `render`, `record`, or `next`, and nothing is written.
-The human enters the decision in the app; unsupported Revise/Hold outcomes must
-not be silently mapped to approval or rejection.
+The human enters the recommendation in the app. Revision needs and uncertainty
+appear in the denial explanation, not as additional final decisions.
 
 ## Where the data lives
 
