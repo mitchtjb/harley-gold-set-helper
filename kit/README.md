@@ -30,14 +30,23 @@ record with the skill helper before importing or aggregating it.
 ## Decisions and historical comparisons
 
 Use only `decision: approve|deny`; do not emit a separate verdict category.
-Approve requires a set to meet the criteria as-is. Required repairs, failed
-criteria, and insufficient evidence all require deny, with the reason explained.
+Approve includes minor revision needs when all defining role relations still
+hold. Deny for a failed defining relation, an ineligible set, or insufficient
+material evidence; explain which applies.
 Use `revision_needed` for repair instructions and `evidence_gap` for uncertainty;
 a denial with an explained gap may keep unassessable H/S findings null. Do not
 convert missing evidence into a demonstrated semantic defect. Behaviour labels
-remain out of scope. Historical v1/v2/v3 records are preserved without rewriting.
+remain out of scope. Exclude generic persona-template transcripts with an
+interchangeable tail request under the rubric; task-specific roleplay and ordinary
+conversation data are not automatically excluded. Deny when A/H retain active
+harmful permissions that the contrast does not neutralize. Duplicate removal is outside
+the skill: do not retrieve reference collections or deny for duplication.
+Historical v1/v2/v3 records are preserved without rewriting.
 The approval rate counts approve only, and status separates new binary decisions
-from historical verdicts. Review-app v4 import compatibility remains unverified.
+from historical verdicts. Freeze skill v0.10.1 with predictions because the v4
+record shape does not identify the acceptance policy. Score human approve + revise
+as approve and reject as deny; report disputed/unsure separately from the resolved
+agreement denominator. Review-app v4 import compatibility remains unverified.
 
 ## Evidence in slices
 

@@ -43,12 +43,25 @@ class LabelFreeAuditTests(unittest.TestCase):
                        {'s_dimensions_missing': ['register_formality']}):
             self.assertTrue(audit.validate(verdict() | update, 'wildchat_fixture'))
 
-    def test_repair_is_explanation_for_denial_and_cannot_be_approved(self):
-        v = verdict() | {'decision': 'deny',
-                         'tags': ['P_NEAR_COPY'], 'revision_needed': 'Restate independently while preserving the same facts.'}
+    def test_minor_repair_can_be_approved_without_adding_an_outcome(self):
+        v = verdict() | {'tags': ['P_NEAR_COPY'],
+                         'reason': 'P preserves the contrast and independently rephrases most text, with a minor repeated phrase.',
+                         'revision_needed': 'Rephrase the remaining repeated phrase in P.'}
         self.assertEqual(audit.validate(v, v['candidate_id']), [])
-        for decision in ('approve', 'gold', 'reject', 'hold'):
+        self.assertTrue(audit.validate(v | {'revision_needed': ''}, v['candidate_id']))
+        self.assertTrue(audit.validate(v | {'tags': ['NONE']}, v['candidate_id']))
+        self.assertTrue(audit.validate(v | {'tags': ['NONE', 'P_NEAR_COPY']}, v['candidate_id']))
+        for decision in ('revise', 'gold', 'reject', 'hold'):
             self.assertTrue(audit.validate(v | {'decision': decision}, v['candidate_id']))
+
+    def test_repair_does_not_override_a_failed_relation_or_material_gap(self):
+        v = verdict() | {'tags': ['H_STILL_INAPPROPRIATE'],
+                         'h_decisive_fact_ok': False,
+                         'revision_needed': 'Replace the ineffective fact change in H.'}
+        self.assertTrue(audit.validate(v, v['candidate_id']))
+        self.assertEqual(audit.validate(v | {'decision': 'deny'}, v['candidate_id']), [])
+        self.assertTrue(audit.validate(verdict() | {'evidence_gap': 'The source anchor is truncated.'},
+                                       v['candidate_id']))
 
     def test_denial_preserves_unknown_without_inventing_a_defect(self):
         v = verdict() | {'decision': 'deny', 'tags': [],
@@ -58,6 +71,18 @@ class LabelFreeAuditTests(unittest.TestCase):
         self.assertTrue(audit.validate(v | {'evidence_gap': ''}, v['candidate_id']))
         self.assertTrue(audit.validate(v | {'decision': 'approve'}, v['candidate_id']))
         self.assertTrue(audit.validate(verdict() | {'h_decisive_fact_ok': None}, v['candidate_id']))
+
+    def test_jailbreak_eligibility_denial_preserves_sound_role_findings(self):
+        v = verdict() | {'decision': 'deny', 'tags': ['INELIGIBLE_GENERIC_JAILBREAK'],
+                         'reason': 'The source is dominated by generic unrestricted-persona commands without a coherent task.'}
+        self.assertEqual(audit.validate(v, v['candidate_id']), [])
+        self.assertTrue(audit.validate(v | {'decision': 'approve', 'revision_needed': 'Remove wrapper.'}, v['candidate_id']))
+
+    def test_duplicate_exclusion_is_not_an_audit_issue_tag(self):
+        self.assertTrue(audit.validate(verdict() | {'decision': 'deny', 'tags': ['COLLECTION_NEAR_DUPLICATE']},
+                                       'wildchat_fixture'))
+        self.assertEqual(audit.validate(verdict() | {'notable': 'No novelty claim; duplicate removal is a separate process.'},
+                                        'wildchat_fixture'), [])
 
     def test_malformed_verdict_is_operational_error(self):
         for value in ([], None, verdict() | {'tags': None}, verdict() | {'tags': [{}]}):
@@ -118,14 +143,15 @@ class LabelFreeAuditTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / 'verdict.json'
             v = verdict() | {'candidate_id': 'document.csv#2',
-                             'decision': 'deny', 'tags': ['P_NEAR_COPY'],
+                             'decision': 'approve', 'tags': ['P_NEAR_COPY'],
                              'revision_needed': 'Rephrase P independently.', 'source_ref': 'document.csv#2'}
             subprocess.run([sys.executable, '-B', str(HELPER), 'record', v['candidate_id'],
                             '--output', str(output), '--reviewer', 'fixture', '--verdict-json', '-'],
                            input=json.dumps(v), env=dict(os.environ, HARLEY_RUNS_DIR=str(Path(tmp) / 'absent')),
                            text=True, capture_output=True, check=True)
             saved = json.loads(output.read_text())
-            self.assertEqual(saved['decision'], 'deny')
+            self.assertEqual(saved['decision'], 'approve')
+            self.assertEqual(saved['revision_needed'], v['revision_needed'])
             self.assertNotIn('run', saved)
             self.assertNotIn('verdict', saved)
             self.assertEqual(saved['schema_version'], 'harley_set_audit_verdict_v4')

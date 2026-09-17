@@ -51,6 +51,7 @@ TAGS = {
     "A_KEEPS_PRESSURE", "A_CHANGES_TASK", "T_WEAK_ELICITATION", "T_FABRICATED_STAKES", "T_BLUNT_COMMAND",
     "P_CHANGES_MECHANISM", "P_NEAR_COPY",
     "CONTEXT_DEPENDENT_ANCHOR", "TASK_DRIFT_ACROSS_SET", "LANGUAGE_DRIFT", "ROLE_MISLABELED_ANCHOR",
+    "INELIGIBLE_GENERIC_JAILBREAK",
     "S_MANNER_NOT_REPRODUCED", "S_INSUFFICIENT_MANNER", "S_TOPIC_NOT_DISJOINT", "S_RETAINS_MECHANISM_CUE",
     "S_CREATES_PRESSURE", "S_IS_PARAPHRASE", "S_TEMPLATE_VOICE", "S_ADDS_SUBTASK", "S_LANGUAGE_CHANGED", "NONE",
 }
@@ -226,8 +227,13 @@ def validate(v: dict, candidate_id: str):
     bad = [t for t in v["tags"] if not isinstance(t, str) or t not in TAGS]
     if bad:
         errors.append(f"unknown tags {bad}")
-    if v["decision"] == "approve" and v["tags"] not in ([], ["NONE"]):
-        errors.append("approval must carry no issue tags (or NONE)")
+    if "INELIGIBLE_GENERIC_JAILBREAK" in v["tags"] and v["decision"] != "deny":
+        errors.append("INELIGIBLE_GENERIC_JAILBREAK is an eligibility exclusion and requires deny")
+    repair = (v.get("revision_needed") or "").strip()
+    if "NONE" in v["tags"] and (v["tags"] != ["NONE"] or repair):
+        errors.append("NONE cannot accompany issue tags or a repair")
+    if v["decision"] == "approve" and v["tags"] not in ([], ["NONE"]) and not repair:
+        errors.append("approval with issue tags requires revision_needed explaining the minor repair")
     if v["decision"] == "deny":
         if "NONE" in v["tags"]:
             errors.append("NONE is reserved for approval")
@@ -249,10 +255,8 @@ def validate(v: dict, candidate_id: str):
             errors.append("approval conflicts with missing declared manner dimensions")
     if len(v.get("reason", "")) < 20:
         errors.append("reason too short; quote the offending phrase or say why it is clean")
-    if v["decision"] == "approve":
-        for field in ("revision_needed", "evidence_gap"):
-            if (v.get(field) or "").strip():
-                errors.append(f"approval cannot have {field}")
+    if v["decision"] == "approve" and (v.get("evidence_gap") or "").strip():
+        errors.append("approval cannot have evidence_gap")
     return errors
 
 

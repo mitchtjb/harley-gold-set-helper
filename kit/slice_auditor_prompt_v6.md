@@ -15,10 +15,17 @@ preserve meaning and voice while independently rephrasing. S must reproduce mann
 on a disjoint, cue-free task. Plans and similarity scores are claims, not proof.
 Ignore behaviour-family labels and correction metadata; do not score label fit.
 Audit all five roles even when only S was regenerated.
+Apply the rubric's combined persona-template + dialogue + interchangeable
+tail-request exclusion. Preserve task-specific roleplay with a concrete conflict;
+conversation markers or persona framing alone are not exclusions. Deny when
+A/H retain active harmful permissions outside the neutralizing change, quoting
+the surviving clause; risky wording made appropriate by H is not itself failure. Duplicate removal is outside this
+audit; judge the current set without retrieving other accepted sets.
 
 Return only approve or deny in the decision field; do not add a separate verdict.
-Approve only if every criterion holds as-is. Deny if repair is required, a criterion
-fails, or material evidence is insufficient. Explain the reason in plain language.
+Approve when defining relations hold, including minor revision needs. Deny when
+a defining relation fails, the set is ineligible, or material evidence is
+insufficient. Explain minor repairs without turning them into denials.
 Use revision_needed for repairs and evidence_gap for uncertainty; unknown H/S
 findings may be null only for deny with an explained gap. Do not describe missing
 evidence as a proven semantic defect.
